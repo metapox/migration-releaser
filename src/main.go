@@ -3,17 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"flag"
 	"fmt"
 	"github.com/metapox/migration-releaser/handlers"
+	"github.com/pkg/errors"
 	"log/slog"
 	"os"
 )
-
-type KeyValuePair struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
-}
 
 type MyEvent struct {
 	S3Bucket string `json:"s3Bucket"`
@@ -29,10 +25,33 @@ type S3Response struct {
 }
 
 func HandleRequest(ctx context.Context, event MyEvent) error {
+	debugMode := flag.Bool("debug", false, "debug mode")
+	flag.Parse()
+
+	var logger *slog.Logger
+	if *debugMode {
+		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	} else {
+		logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	}
+	slog.SetDefault(logger)
+
+	err := Migrate(ctx, event)
+	if err != nil {
+		slog.Error(fmt.Sprintf("%+v", err))
+		return err
+	}
+	return nil
+}
+
+func Migrate(ctx context.Context, event MyEvent) error {
 	dbType := os.Getenv("DB_TYPE")
-	handler := handlers.NewDatabaseHandler(dbType)
-	if handler == nil {
-		return errors.New(dbType + " is not supported")
+	if dbType == "" {
+		return errors.New("DB_TYPE is not set")
+	}
+	handler, err := handlers.NewDatabaseHandler(dbType)
+	if err != nil {
+		return err
 	}
 
 	//s3Client := s3.New(session.Must(session.NewSession()))
@@ -49,20 +68,36 @@ func HandleRequest(ctx context.Context, event MyEvent) error {
 	}
 
 	for _, item := range resp.Contents {
-		dbName := item.Key
-		dbUrl, err := dataBaseUrl("")
+		initDb := os.Getenv("INIT_DB_NAME")
+		if initDb == "" {
+			return errors.WithStack(errors.New("INIT_DB_NAME is not set"))
+		}
+
+		dbUrl, err := dataBaseUrl(initDb)
 		if err != nil {
 			return err
 		}
+
+		slog.Info("Creating database " + item.Key)
 		err = handler.CreateDatabase(dbUrl, item.Key)
 		if err != nil {
 			return err
 		}
-		dbUrl, err = dataBaseUrl(dbName)
+		slog.Info("Database " + item.Key + " is created")
+
+		targetDB := item.Key
+		dbUrl, err = dataBaseUrl(targetDB)
+		if err != nil {
+			return err
+		}
+
+		slog.Info("Migrating database " + targetDB)
 		err = handler.UpMigrate(dbUrl, "")
 		if err != nil {
 			return err
 		}
+
+		slog.Info("Database " + targetDB + " is migrated")
 	}
 
 	return nil
@@ -88,12 +123,6 @@ func dataBaseUrl(dbName string) (string, error) {
 	port, err := os.LookupEnv("PORT")
 	if !err {
 		return "", errors.New("PORT is not set")
-	}
-	if dbName == "" {
-		dbName = os.Getenv("INIT_DB_NAME")
-		if dbName == "" {
-			return "", errors.New("INIT_DB_NAME is not set")
-		}
 	}
 
 	parameterString := os.Getenv("DB_PARAMETER")
@@ -124,7 +153,6 @@ func main() {
 	}
 	err := HandleRequest(context.Background(), event)
 	if err != nil {
-		slog.Error("Failed to handle request: %v", err)
 		os.Exit(1)
 	}
 
