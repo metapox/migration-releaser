@@ -30,7 +30,7 @@ func HandleRequest(ctx context.Context, event MyEvent) error {
 
 	var logger *slog.Logger
 	if *debugMode {
-		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	} else {
 		logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	}
@@ -38,7 +38,10 @@ func HandleRequest(ctx context.Context, event MyEvent) error {
 
 	err := Migrate(ctx, event)
 	if err != nil {
-		slog.Error(fmt.Sprintf("%+v", err))
+		logger.Error(
+			err.Error(),
+			"StackTrace", err.(interface{ StackTrace() errors.StackTrace }).StackTrace(),
+		)
 		return err
 	}
 	return nil

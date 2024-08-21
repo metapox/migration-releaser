@@ -14,6 +14,6 @@ func NewDatabaseHandler(db string) (DatabaseHandler, error) {
 	case "mysql":
 		return &MysqlHandler{}, nil
 	default:
-		return nil, errors.WithStack(errors.New("unsupported database type"))
+		return nil, errors.WithStack(errors.New("unsupported database type " + db))
 	}
 }
